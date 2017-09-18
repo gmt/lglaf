@@ -87,6 +87,9 @@ laf_error_codes = {
     0x80000409: "PRL_WRITE_FAIL",
 }
 
+def globalver():
+    return globalver.v
+globalver.v=5
 
 _ESCAPE_PATTERN = re.compile(b'''\\\\(
 x[0-9a-fA-F]{2} |
@@ -188,7 +191,11 @@ def make_exec_request(shell_command):
     # Allow use of shell constructs such as piping and reports syntax errors
     # such as unterminated quotes. Remaining limitation: repetitive spaces are
     # still eaten.
-    argv = b'sh -c eval\t"$*"</dev/null\t2>&1 -- '
+    _logger.debug("Processing commend \"%s\"" % shell_command)
+    if globalver() < 4:
+        argv = b'sh -c eval\t"$*"</dev/null\t2>&1 -- '
+    else:
+        argv = b''
     argv += shell_command.encode('ascii')
     if len(argv) > 255:
         raise RuntimeError("Command length %d is larger than 255" % len(argv))
@@ -333,10 +340,17 @@ def try_hello(comm):
     # Wait for at most 5 seconds for a response... it shouldn't take that long
     # and otherwise something is wrong.
     HELLO_READ_TIMEOUT = 5000
-
-    hello_request = make_request(b'HELO', args=[b'\1\0\0\1'])
+    hello_request = make_request(b'HELO', args=[int_as_byte(globalver()) + b'\0\0\1'])
     comm.write(hello_request)
-    data = comm.read(0x20, timeout=HELLO_READ_TIMEOUT)
+    try:
+        _logger.debug("Sent HELO: %s" %
+                repr(int_as_byte(globalver()) + b'\0\0\1').replace(
+                    "\\x00", "\\0"))
+        data = comm.read(0x20, timeout=HELLO_READ_TIMEOUT)
+    except RuntimeError:
+        _logger.warn('First HELO failed, trying again.')
+        comm.reset()
+        data = comm.read(0x20, timeout=HELLO_READ_TIMEOUT)
     if data[0:4] != b'HELO':
         # Unexpected response, maybe some stale data from a previous execution?
         while data[0:4] != b'HELO':
@@ -347,10 +361,16 @@ def try_hello(comm):
             except RuntimeError: pass
             # Flush read buffer
             comm.reset()
+            _logger.warn('HELO failed, trying again.')
             data = comm.read(0x20, timeout=HELLO_READ_TIMEOUT)
-        # Just to be sure, send another HELO request.
-        comm.call(hello_request)
-
+    # send another HELO request with adjusted best-guess version
+    _logger.debug("HELO Response: %s" % ":".join(
+        repr(data[i:i+4]).replace("\\x00", "\\0")
+        for i in range(0,len(data),4)))
+    remotever = data[4:8]
+    hello_request = make_request(b'HELO', args=[remotever])
+    comm.call(hello_request)
+    globalver.v = ord(remotever[0])
 
 def detect_serial_path():
     try:
