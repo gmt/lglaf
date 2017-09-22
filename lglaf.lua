@@ -41,22 +41,27 @@ function lglaf.dissector(tvb, pinfo, tree)
     local transfer_type = usb_transfer_type().value
     local endpoint = usb_endpoint().value
 
-    -- Process only bulk packets from (EP 5) and to the device (EP 3)
-    if not ((endpoint == 0x85 or endpoint == 3) and transfer_type == 3) then
-        return 0
-    end
+    -- Hopefully process only bulk packets from and to the device (FIXME: need table of models or some new trick?)
+    -- if not ((endpoint == 0x85 or endpoint == 0x83 or endpoint == 2 or endpoint == 3) and transfer_type == 3) then
+    --     return 0
+    -- end
 
     pinfo.cols.protocol = lglaf.name
 
     local lglaf_tree = tree:add(lglaf, tvb())
+    if tvb:len() < 0x20 then
+	return 0
+    end
     if tvb(0, 4):le_uint() ~= bit.bnot(tvb(0x1c, 4):le_uint()) then
         pinfo.cols.info:set("Continuation")
-        return
+        return 0
     end
 
     local next_offset = 0
+    local total_offset = 0
     function add_dword(field)
         next_offset = next_offset + 4
+        total_offset = total_offset + 4
         field_tvb = tvb(next_offset - 4, 4)
         lglaf_tree:add_le(field, field_tvb)
         return field_tvb
@@ -81,20 +86,40 @@ function lglaf.dissector(tvb, pinfo, tree)
     end
     pinfo.cols.info:append(")")
 
-    -- TODO desegmentation support
-    local body_len = v_len:le_uint()
-    if body_len > 0 then
-        local body_tvb = tvb(next_offset, body_len)
-        lglaf_tree:add(lglaf.fields.body, body_tvb)
-        lglaf_tree:add(lglaf.fields.body_str, body_tvb)
+    local body_tvb
 
-        local body_summary = body_tvb:string()
-        body_summary = string.gsub(body_summary, "\n", "\\n")
-        if #body_summary > 50 then
-            body_summary = string.sub(body_summary, 1, 80) .. "…"
-        end
-        pinfo.cols.info:append(" [" .. body_len ..  "] " .. body_summary)
+    -- TODO desegmentation support
+    local body_len = tvb:len() - next_offset
+    if body_len > 0 then
+	if next_offset < body_len then
+            body_tvb = tvb(next_offset)
+	    total_offset = total_offset + body_tvb:len()
+	else
+	    body_tvb = nil
+	end
+    else
+	body_tvb = nil
     end
+    if body_tvb == nil then
+	lglaf_tree:add(lglaf.fields.body, "")
+	lglaf_tree:add(lglaf.fields.body_str, "")
+    else
+	lglaf_tree:add(lglaf.fields.body, body_tvb)
+	lglaf_tree:add(lglaf.fields.body_str, body_tvb)
+    end
+
+    local body_summary
+    if body_tvb == nil then
+	body_summary = ""
+    else
+	body_summary = body_tvb:string()
+    end
+    body_summary = string.gsub(body_summary, "\n", "\\n")
+    if #body_summary > 50 then
+	body_summary = string.sub(body_summary, 1, 80) .. "…"
+    end
+    pinfo.cols.info:append(" [" .. body_len ..  "] " .. body_summary)
+    return total_offset
 end
 
 function lglaf.init()
