@@ -89,7 +89,7 @@ laf_error_codes = {
 
 def globalver():
     return globalver.v
-globalver.v=5
+globalver.v=4
 
 _ESCAPE_PATTERN = re.compile(b'''\\\\(
 x[0-9a-fA-F]{2} |
